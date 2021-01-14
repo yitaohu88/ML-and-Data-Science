@@ -1,0 +1,191 @@
+---
+title: "MLPS2"
+author: "Hao Ran Li, Feiwen Liang, Leila Lan, Susu Zhu, Yitao Hu"
+date: "12/04/2020"
+output: pdf_document
+---
+
+##Question 1
+```{r message=FALSE, warning=FALSE}
+#import data and libraries
+library('lfe')
+library('stargazer')
+library(readr)
+library(data.table)
+library(foreign)
+library(knitr)
+library(ggplot2)
+library(reshape2)
+Car_data <- read_csv("imports85_modified.csv", 
+    col_types = cols(city.mpg = col_double(), 
+        horsepower = col_double(), price = col_double()))
+
+```
+
+#1 
+Here we regress city.mpg on horsepower without fixed effects.
+```{r message=FALSE, warning=FALSE}
+#regression without fixed effects or clustering
+city_mpg_no_fixed_effect=felm(Car_data$city.mpg~Car_data$horsepower)
+stargazer(city_mpg_no_fixed_effect,type = 'text',report = 'vc*t')
+```
+Under the assumption of i.i.d standard errors and without the fixed effect of another categorical variable, we get a positive and statistically significant slope coefficient,which implies that horsepower has a positive effect on city.mpg. But we also notice that this regression has a low explanatory power, which is concluded from low R square of 4.9%.
+
+#2
+Here we regress city.mpg on horsepower with the fixed effect of whether the number of cylinders is 'two' or 'four'. Note here, we first subset the data by whether the number of cylinders are 'two' or 'four'.
+```{r message=FALSE, warning=FALSE}
+#subset the data to only the cars with 2 or 4 cylinders 
+Cars_data_two_four_cylinders=Car_data[(Car_data$num.of.cylinders=='two')|(Car_data$num.of.cylinders=='four'),]
+#run the regression with the fixed effects 
+city_mpg_two_four_cylinders=felm(Cars_data_two_four_cylinders$city.mpg~Cars_data_two_four_cylinders$horsepower|Cars_data_two_four_cylinders$num.of.cylinders|0|0)
+
+stargazer(city_mpg_two_four_cylinders,type = 'text',report = 'vc*t')
+```
+Note here the slope coefficient becomes statically negative number. This is because the coefficient in this regression is the effect of horsepower on mpg holding number of cylinders constant, or the partial effect of horsepower. We also note that the model has much greater explanatory power with a R square of 67.8%. Comparing this result with our previous model, we conclude that the positive coefficient in part 1 model is actually driven by number of cylinders instead of horsepower.
+
+#3
+```{r message=FALSE, warning=FALSE}
+Cars_data_two_four_cylinders=data.table(Cars_data_two_four_cylinders)
+#demean by groups 
+demean_Cars_data=Cars_data_two_four_cylinders[,list(horsepower=horsepower-mean(horsepower,na.rm=T),city.mpg=city.mpg-mean(city.mpg)),by=num.of.cylinders]
+
+#re-run the regression without fixed effects
+#run the regression with the fixed effects 
+demean_two_four_cylinders=felm(demean_Cars_data$city.mpg~demean_Cars_data$horsepower|0|0|0)
+
+stargazer(demean_two_four_cylinders,type = 'text',report = 'vc*t')
+```
+
+The results are the same from those obtained in part 2. We can conclude that adding a fixed effect in linear regression is equivalent to perform a groupped de-mean transformation for both independent and dependent variables. 
+
+##Question 2 
+```{r}
+#import data
+StockRetAcct_DT= as.data.table(read.dta("StockRetAcct_insample.dta")) #set the key as firm ID and year
+setkey(x = StockRetAcct_DT,FirmID,year)
+#compute the excess returns 
+StockRetAcct_DT[,ExRet:=exp(lnAnnRet)-exp(lnRf),]
+```
+#1
+Perform Fama-MacBeth Regression and report the results
+```{r}
+port_ret = NULL
+for (i in 1980:2014) 
+{
+StockRetAcct_yr =StockRetAcct_DT[year==i,]
+Model_yr =lm(StockRetAcct_yr$ExRet ~ StockRetAcct_yr$lnInv)
+port_ret = rbind(port_ret,Model_yr$coef[2])
+}
+ fm_output = list(MeanReturn = mean(port_ret), 
+                  StdReturn = sqrt(var(port_ret)),
+                  SR_Return = mean(port_ret)/sqrt(var(port_ret)))
+fm_output
+```
+
+#2
+Recall in Fama-MacBeth Regression, at each time step t, we compute the coefficients (Portfolio Returns) in the following way as we did in regular linear regression:
+$$\vec{\lambda}_t=(X^T_{t-1}X_{t-1})^{-1}X_{t-1}\vec{r}_{t}$$
+where $\vec{\lambda}_t$ is a vector of excess portfolio returns for all factor-based long-short strategies,$\vec{r}_{t}$ is a vector of excess returns for each asset for the time period t, and $X_{t-1}$ is the feature matrix at time t-1.
+
+We know 
+$$r_{port}=\vec{w}^T\vec{r}$$
+
+Therefore, the portfolio weights to construct all factor-based long-short strategies are computed as:
+$$W_t=(X^T_{t-1}X_{t-1})^{-1}X_{t-1}$$
+where each row vector of the matrix $W_t$ is the portfolio weights to construct the corresponded factor-based trading strategy at time t-1.
+
+In this case, the second row of $W_t$ is the portfolio weights to construct lnInv-based long-short strategy at time t-1.
+
+
+#3
+
+To reduce the industry-based noise, we add the Industries as a categorical variable in our original Fama-MacBeth Regression. In this case, the return of our long-short portfolio would be the "pure" return from Investment factor. 
+
+```{r}
+Cleaned_port_ret = NULL
+for (i in 1980:2014) 
+{
+StockRetAcct_yr =StockRetAcct_DT[year==i,]
+Model_yr =lm(StockRetAcct_yr$ExRet ~ StockRetAcct_yr$lnInv+as.factor(StockRetAcct_yr$ff_ind))
+Cleaned_port_ret = rbind(Cleaned_port_ret,Model_yr$coef[2])
+}
+Cleaned_fm_output = list(MeanReturn = mean(Cleaned_port_ret), 
+                  StdReturn = sqrt(var(Cleaned_port_ret)),
+                  SR_Return=mean(Cleaned_port_ret)/sqrt(var(Cleaned_port_ret)))
+Cleaned_fm_output
+```
+
+Note here, the Sharpe Ratio increases significantly from 0.58 to 0.81 (We are shorting the lnInv factor).
+
+
+#4
+```{r}
+#set risk constraint
+SD_constraint=0.15
+#compute the cumulative return after adding the leverage 
+Un_cleaned_Ret=(-port_ret)*(SD_constraint/as.numeric(fm_output$StdReturn))
+Cum_Uncleaed_Ret=cumprod(1+Un_cleaned_Ret)-1
+
+Cleaned_Ret=(-Cleaned_port_ret)*(SD_constraint/as.numeric(Cleaned_fm_output$StdReturn))
+Cum_cleaed_Ret=cumprod(1+Cleaned_Ret)-1
+
+Ret_dt=data.frame(cbind(1980:2014,Cum_Uncleaed_Ret,Cum_cleaed_Ret))
+Ret_dt=melt(data = Ret_dt,id=1)
+colnames(Ret_dt)=c('year','Portfolio','Return')
+#plot the two series
+ggplot(Ret_dt,aes(x = year,y = Return,col=Portfolio))+geom_line()
+```
+
+##Question 3
+
+#1
+
+```{r message=FALSE, warning=FALSE}
+#define next year rv
+StockRetAcct_DT[,leadrv:=shift(rv,type = 'lead'),]
+#define five year ahead rv
+StockRetAcct_DT[,lead5rv:=shift(rv,type = 'lead',n = 5),]
+#run regressions
+rvModelno=felm(formula = leadrv~rv+lnProf+lnLever+lnBM+lnROE+lnInv,StockRetAcct_DT)
+#with fixed effect on year
+rvModel1=felm(formula = leadrv~rv+lnProf+lnLever+lnBM+lnROE+lnInv |year|0|0,StockRetAcct_DT)
+#with fixed effect on year and industry
+rvModel2=felm(formula = leadrv~rv+lnProf+lnLever+lnBM+lnROE+lnInv |year+ff_ind|0|0,StockRetAcct_DT)
+#with auto-covariance but no industry fixed effect 
+rvModel3=felm(formula = leadrv~rv+lnProf+lnLever+lnBM+lnROE+lnInv |year|0|year,StockRetAcct_DT)
+#with auto-covariance and cross-sectional clustering but no industry fixed effect 
+rvModel4=felm(formula = leadrv~rv+lnProf+lnLever+lnBM+lnROE+lnInv |year|0|year+FirmID,StockRetAcct_DT)
+stargazer(rvModelno,rvModel1,rvModel2,rvModel3,rvModel4,type = 'text',report = 'vc*t')
+```
+
+From the table above, we can see that adding a year fixed effect and standard error clustering significantly changed the model explanatory power (R square) and coefficient significance, while an industry fixed effects and cross-sectional clustering standard errors have minor impacts.
+
+I would argue that the year fixed effect and standard error clustering come from the stylized fact of volitility clustering. Because volitility cluters within and across time, it is appropriate to add a year fixed effect and clustering feature in our panel regressional to capture this feature. 
+
+
+#2
+Regressional results for five year lead realized variance.
+
+```{r message=FALSE, warning=FALSE}
+#run regressions
+rvModelno=felm(formula = lead5rv~rv+lnProf+lnLever+lnBM+lnROE+lnInv,StockRetAcct_DT)
+#with fixed effect on year
+rvModel1=felm(formula = lead5rv~rv+lnProf+lnLever+lnBM+lnROE+lnInv |year|0|0,StockRetAcct_DT)
+#with fixed effect on year and industry
+rvModel2=felm(formula = lead5rv~rv+lnProf+lnLever+lnBM+lnROE+lnInv |year+ff_ind|0|0,StockRetAcct_DT)
+#with auto-covariance but no industry fixed effect 
+rvModel3=felm(formula = lead5rv~rv+lnProf+lnLever+lnBM+lnROE+lnInv |year|0|year,StockRetAcct_DT)
+#with auto-covariance and cross-sectional clustering but no industry fixed effect 
+rvModel4=felm(formula = lead5rv~rv+lnProf+lnLever+lnBM+lnROE+lnInv |year|0|year+FirmID,StockRetAcct_DT)
+stargazer(rvModelno,rvModel1,rvModel2,rvModel3,rvModel4,type = 'text',report = 'vc*t')
+```
+
+From the table above, we observe that only the lnProf and lnLever become statistically insignificant, but the R square decreased significantly from 54.6% to around 19.4%. Therefore, I conclude that we cannot predict 5-year head realized variance at a high confidence level because our model has limited explantory power. 
+
+
+#3
+
+The greatest merit of running panel regression is that we increase the number of observations (and hopefully increase predictive power) for our model because coefficients are "trained" by a larger sample size. Also, we reduced the possibility of over-fitting by fitting shared coefficients across all firms. Lastly, we can adjust the fixed effects across time to increase the predictive power of our model. 
+
+The largest potential costs is the making simplification assumptions on the variance-covariance matrix of residuals to gain computational efficiency. If we run regressions on each firm, we can estimate the var-cov matrix and compute robust standard errors for all co-efficients, but we cannot implement the same approach because of large sample size. The assumptions we make on var-cov matrix may distort the panel regression results. 
+

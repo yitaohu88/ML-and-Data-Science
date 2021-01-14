@@ -1,0 +1,220 @@
+---
+title: "Machine_Learning_PS1"
+author: "Hao Ran Li, Feiwen Liang, Leila Lan, Susu Zhu, Yitao Hu"
+date: "04/04/2020"
+output: pdf_document
+---
+
+```{r message=FALSE, warning=FALSE}
+#import library and data 
+ library(ggplot2)
+library(readr)
+car_data=read_csv("imports-85.csv", 
+   col_types = cols(horsepower = col_double(), 
+      price = col_double(),
+      `engine-size` = col_double(),
+      `city-mpg` = col_double()))
+```
+##Question1
+#1
+Plot the scatterplot b/w price and horsepower where bodystyle as a discrete variable.
+
+
+
+```{r message=FALSE, warning=FALSE}
+qplot(x = horsepower,y = price,facets = `body-style`~.,data = car_data,main = "Price vs. Horsepower",xlab = 'Horsepower',ylab = 'Price')+geom_smooth(method = 'lm')+theme_bw()
+```
+
+
+
+Plot the scatterplot b/w log(price) and horsepower where bodystyle as a discrete variable.
+```{r message=FALSE, warning=FALSE}
+qplot(x = horsepower,y = log(price),facets = `body-style`~.,data = car_data,main = "log(Price) vs. Horsepower",xlab = 'Horsepower',ylab = 'log(Price)')+geom_smooth(method = 'lm')+theme_bw()
+```
+
+
+
+Plot the scatterplot b/w price^2 and horsepower where bodystyle as a discrete variable.
+```{r message=FALSE, warning=FALSE}
+qplot(x = horsepower,y = price^2,facets = `body-style`~.,data = car_data,main = "Price^2 vs. Horsepower",xlab = 'Horsepower',ylab = 'Price^2')+geom_smooth(method = 'lm')+theme_bw()
+```
+
+From the graphs above, we cannot see any clear relationship b/w bodystyle and price beyond horsepower. 
+
+#2
+I will regress car prices on engine size 
+
+```{r}
+PriceOvereEngineSize=lm(formula = car_data$price~car_data$`engine-size`)
+summary(PriceOvereEngineSize)
+```
+Plot the residuals over fitted 
+
+```{r}
+qplot(x = PriceOvereEngineSize$fitted.values,y = PriceOvereEngineSize$residuals,main = 'Residuals V.S. Fitted Value of Car Prices',xlab = 'Fitted Value of Car Prices',ylab = 'Residuals')
+```
+From the graph above, we observe that the residuals tend to randomly distributed given any level of Fitted value, and that no non-linear relationship exist b/w the residuals and the fitted values. Therefore, we can conclude that our linear model is appropriate in this case. 
+
+Plot the residuals over horsepower
+```{r message=FALSE, warning=FALSE}
+qplot(x = car_data$horsepower[which(!is.na(car_data$price))],y = PriceOvereEngineSize$residuals,main = 'Residuals V.S. horsepower',xlab = 'horsepower',ylab = 'Residuals')
+```
+From the graph above, we can observe that the variance of residuals tends to increases with horsepower. Therefore, we can conclude that the horsepower can be an omitted variable to our orginial linear model. 
+
+#3
+Scatterplot between city-mpg and horse power
+
+```{r message=FALSE, warning=FALSE}
+qplot(x = car_data$horsepower,y = car_data$`city-mpg`,main = 'Horsepower V.S. City-mpg',xlab = 'Horsepower',ylab = 'City-mpg')
+```
+
+Regress City-mpg on horsepower
+```{r}
+MPGonHorsepower=lm(formula = car_data$`city-mpg`~car_data$horsepower)
+summary(MPGonHorsepower)
+```
+
+The regression is inconsistent with the scatterplot. From the scatterplot, we can observe that city-mpg is negatively correlated with horsepower, but the relationship is non-linear. 
+
+We can also check the appropriateness of linear model by ploting the residuals over the fitted values.
+
+```{r}
+qplot(x = MPGonHorsepower$fitted.values,y = MPGonHorsepower$residuals,
+      xlab = 'Fitted mpg',ylab = 'Residuals')
+```
+
+
+
+
+##Question2 
+
+```{r}
+#import data and libraries
+library(data.table)
+library(foreign)
+StockRetAcct_DT= as.data.table(read.dta("StockRetAcct_insample.dta"))
+#set the key as firm ID and year 
+setkey(x = StockRetAcct_DT,FirmID,year)
+#creat returns
+StockRetAcct_DT[,AnnRet:=exp(lnAnnRet)-1]
+```
+
+#a
+First we need to define the issuance ranking variable. To make the strategy tradable, we need to do it in a loop.
+Then, we value-weighted for each portfolio for each year, and then average across years
+```{r}
+# loop through the years in the data base 
+for (i in 1981:2014)
+{
+ StockRetAcct_DT[year == i,Issue_vingtile_yr:=cut(StockRetAcct_DT[year == i,]$lnIssue,
+breaks=quantile(StockRetAcct_DT[year == i,]$lnIssue,probs=c(0:10)/10,na.rm=TRUE), include.lowest=TRUE, labels=FALSE)] }
+
+# first, we need to value-weight stocks within each portfolio for each year
+VW_lnIssue_Funds_yr = StockRetAcct_DT[,list(MeanAnnRet = weighted.mean(x = AnnRet,w = MEwt)), by = list(Issue_vingtile_yr, year)]  
+
+# then we average across years
+VW_lnIssue_Funds_yr = VW_lnIssue_Funds_yr[,list(MeanAnnRet = mean(MeanAnnRet)), by = Issue_vingtile_yr]
+#drop the nas
+VW_lnIssue_Funds_yr =na.omit(VW_lnIssue_Funds_yr)
+VW_lnIssue_Funds_yr[order(Issue_vingtile_yr)]
+```
+```{r}
+
+```
+
+
+#b 
+Plot the relationship
+```{r message=FALSE, warning=FALSE}
+qplot(x =VW_lnIssue_Funds_yr$Issue_vingtile_yr, y = VW_lnIssue_Funds_yr$MeanAnnRet,na.rm = TRUE,
+main = "Ln(Issue) ranking vs. Value-weighted Fund Return",
+xlab = 'Ln(Issue) ranking ',
+ylab = 'Value-weighted Fund Return'
+) + geom_smooth(col=I("red")) + theme_bw()
+```
+
+From the graph, we can conclude that the relationship between Issue ranking and sorted Fund returns are not linear.
+
+#c 
+First,we need to construct the transformed Issue-related feature.
+```{r}
+StockRetAcct_DT[Issue_vingtile_yr>0,Issue_trans:=0]
+StockRetAcct_DT[Issue_vingtile_yr==1,Issue_trans:=-1]
+StockRetAcct_DT[Issue_vingtile_yr==10,Issue_trans:=1]
+```
+
+Then, we can perform Fama-MacBeth Regression.
+
+Recall the weight-matrix at each timestep t-1 to construct Fama-MacBeth factors are 
+$$W_{t}=(X_t^TX_t)^{-1}X_t^T$$
+where X is the design matrix at time t. 
+
+The 2nd row of W would be the weights vector to construct the transformed Issue-related factor portfolio. 
+
+```{r}
+#initialize the weights matrix
+Weight_mat=matrix(data = 0,nrow = length(1984:2014),ncol = 3)
+#loop across time 
+for (t in 1984:2014){
+  #build the desigh matrix
+  Xt=cbind(1,StockRetAcct_DT[year==t,]$Issue_trans)
+  #drop all the nas
+  Xt=na.omit(Xt)
+  #compute the Weight matrix 
+  Wt=solve(t(Xt)%*%Xt)%*%t(Xt)
+  #get the weights for the issue-related portfolio
+  weights_t=Wt[2,]
+  #sum the weights by transformed Issue variable
+  grouped_Weights_t=data.table(cbind(Xt[,2],weights_t))[,list(Weights = sum(weights_t)), by = V1]
+  grouped_Weights_t=grouped_Weights_t[order(V1),]
+  Weight_mat[(t-1983),]=t(grouped_Weights_t[,2])
+}
+```
+
+Then we can plot the summed weights for stocks grouped by transfromed issue variable.
+```{r}
+Weight_sr=data.table(cbind(1984:2014,Weight_mat))
+colnames(Weight_sr)=c('time','Weight -1','Weight 0','Weight 1')
+#melt the data
+Weight_sr=melt(Weight_sr, id.vars <- 'time', variable.name='Transformed_issue')
+Weiht_Plt=qplot(x = Weight_sr$time,y = Weight_sr$value,main = 'Time Series of Weights by Issue',xlab = 'Time',ylab = 'Weight')+geom_line(aes(colour=Weight_sr$Transformed_issue))
+Weiht_Plt+labs(colour = "Transformed Issue")
+```
+
+From the graph above, we can conclude that, the implied positions of Fama-MacBeth regression is long the first 10 percentile portfolio and short the last 10 percentile portfolio with the same weights of 0.5.
+
+##Question 3
+
+#a
+
+```{r}
+#define ranking variable based on lnBM and lnME
+for (i in 1981:2014)
+{
+ StockRetAcct_DT[year == i,BM_vingtile_yr:=cut(StockRetAcct_DT[year == i,]$lnBM,
+breaks=quantile(StockRetAcct_DT[year == i,]$lnBM,probs=c(0:5)/5,na.rm=TRUE), include.lowest=TRUE, labels=FALSE)] 
+  StockRetAcct_DT[year == i,Size_vingtile_yr:=cut(StockRetAcct_DT[year == i,]$lnME,
+breaks=quantile(StockRetAcct_DT[year == i,]$lnME,probs=c(0:5)/5,na.rm=TRUE), include.lowest=TRUE, labels=FALSE)] }
+```
+
+#b
+```{r}
+# first, we need to value-weight stocks within each portfolio for each year
+VW_BM_ME_Funds_yr = StockRetAcct_DT[,list(MeanAnnRet = weighted.mean(x = AnnRet,w = MEwt)), by = list(BM_vingtile_yr, Size_vingtile_yr,year)]  
+
+# then we average across years
+VW_BM_ME_Funds_yr = VW_BM_ME_Funds_yr[,list(MeanAnnRet = mean(MeanAnnRet)), by = list(BM_vingtile_yr, Size_vingtile_yr)]
+#drop nas
+VW_BM_ME_Funds_yr=na.omit(VW_BM_ME_Funds_yr)
+#sorting by ascending order
+VW_BM_ME_Funds_yr=VW_BM_ME_Funds_yr[order(BM_vingtile_yr,Size_vingtile_yr)]
+```
+plot the relationship.
+```{r}
+BM_Size_Ranking_plt_obj=qplot(data = VW_BM_ME_Funds_yr,x = BM_vingtile_yr,y = MeanAnnRet,facets = Size_vingtile_yr~.,main = 'Mean return for portfolios sorted by BM and Size',xlab = 'Book-to-Market Ranking',ylab = 'Mean Annual Return')
+BM_Size_Ranking_plt_obj+geom_smooth(method = 'lm')+labs(facets='Size Ranking')+theme_bw()
+```
+
+The graph is consistent with the hypothesis that, holding size constant, there is a linear relationship between value-weighted mean return and the Value Ranking.
+
+We can also observe that, the slope of the line, the value spread, is larger for small stock portfolios. 

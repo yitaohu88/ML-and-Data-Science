@@ -1,0 +1,214 @@
+---
+title: "Machine Learning PS3:Logistical regression"
+author: "Hao Ran Li, Feiwen Liang, Leila Lan, Susu Zhu, Yitao Hu"
+date: "18/04/2020"
+output: pdf_document
+---
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#import data and libraries
+library(foreign)
+library(data.table)
+library(ggplot2)
+library(knitr)
+CreditData= as.data.table(read.dta("LendingClub_LoanStats3a_v12.dta"))
+```
+
+###Question 1 Predicting default
+##a Data cleaning and exploration
+#i data cleaning
+```{r}
+#Drop all rows where "loan_status" is not equal to either "Fully Paid" or "Charged Off."
+CreditData=CreditData[CreditData$loan_status=='Fully Paid'|CreditData$loan_status=='Charged Off',,]
+# define the deflault dummy variable 
+CreditData[CreditData$loan_status=='Charged Off',Default:=1,]
+CreditData[CreditData$loan_status=='Fully Paid',Default:=0,]
+```
+
+#ii data exploration
+```{r}
+Defalut_rate_insam=length(CreditData$Default[CreditData$Default==1])/nrow(CreditData)
+names(Defalut_rate_insam)='In-sample Default Rate'
+kable(Defalut_rate_insam)
+```
+
+##b
+#i Simple Logistical Regression 
+```{r}
+SimpleLR=glm(data = CreditData,formula = Default~grade,family = 'binomial')
+summary(SimpleLR)
+```
+The intercept would be interpretated as "The impact of being a grade A borrower on the default score", where the default score is the pre-sigmoid transformed value used to compute conditional default probability. Because the regressors in this models are categorical variables, the integration of other slope coefficients would be "the incremental impact of being a such grade  borrower on the default score, compared with a grade A borrower." Because the higher the default score, the more likely the borrower will default, the positive  coefficients(smaller with lower grades) absolutely make sense, as lower grade borrowers are more likely to default than higher grade borrowers. 
+
+#ii Likelihood deviance test 
+To test whether our simple model makes significance improvement in terms of default probability, we have to perform a $\chi^2$ test.
+
+Define the Null and Model deviance:
+$$d_{null}=2(lnL(M_{perfect})-lnL(M_{null}))$$
+$$d_{test}=2(lnL(M_{perfect})-lnL(M_{test}))$$
+These two deviances have already been computed by the glm function. 
+
+We know: 
+$$d_{null}-d_{test}\sim \chi^2(df=df_{null}-df_{test})$$
+Therefore, we can compute the p-val accordingly.
+```{r}
+#define a function to perform likelyhood deviace test
+Deviance_Test=function(Model){
+   chi_sq_stats=Model$null.deviance-Model$deviance
+   p_val=1-pchisq(q = chi_sq_stats,df = Model$df.null-Model$df.residual)
+   out=c(chi_sq_stats,p_val)
+   names(out)=c('Test stats','p-value')
+   return(out)
+}
+kable(Deviance_Test(Model = SimpleLR))
+```
+
+From the table above we can see, the p-value of the test is numerically 0, and therefore, we can conclude that our model has significant improvement over the null model.
+
+#iii Lift table and ROC curve
+Here we define a function to compute the lift table and ROC curve.
+```{r}
+lift_table=function(Model,data,break_probs){
+  phat=Model$fitted.values
+  #add some noise to make the probs unique
+  break_points=quantile(phat+rnorm(length(phat),0,0.0001),probs = break_probs)
+  deciles=cut(phat,breaks =break_points,
+             include.lowest = T)
+  deciles=as.numeric(deciles)
+  datatb=data.table(deciles=deciles,phat=phat,default=data$Default)
+  lift=aggregate(datatb,FUN='mean',by=list(deciles),data=datatb)
+  lift=lift[,-1,]
+  #compute the lift factor 
+  lift[,3]=lift[,3]/mean(data$Default)
+  names(lift)=c('decile','Mean p-hat','Lift Factor')
+  return(lift)
+}
+kable(lift_table(Model = SimpleLR,data = CreditData,break_probs=seq(0,1,0.25)))
+```
+```{r}
+data=CreditData
+Model=SimpleLR
+#define a function to get the ROC curve
+simple_roc=function(data,Model){
+  fitted=Model$fitted.values
+  lables=data$Default
+  lables=lables[order(fitted,decreasing = T)]
+  Rate_table=data.table(TPR=cumsum(lables)/sum(lables),
+                    FPR=cumsum(!lables)/sum(!lables))
+  #plot the ROC curve
+  plt=qplot(y = TPR,x = FPR,data = Rate_table,col=I('blue'),
+        main = 'ROC curve for logistic Regression',size=I(0.75))
+  #add a 45 degree line
+  plt=plt+geom_segment(aes(x = 0,xend=1,y=0,yend=1),size=I(1.0))+theme_bw()
+  return(plt)
+}
+plt=simple_roc(data = CreditData,Model = SimpleLR)
+plt
+```
+
+The Mean-phat is the mean predicted default probability for each declie ranked by fiited default probability of our model, and the lift-factor is true default rate of each decile divided by the grand mean default rate. From the table, we can see that there are significant incremental increase in the lift factors, and therefore, we can conclude that our model is better than a random guess. 
+
+The line in the ROC curve represents a random guess, and if the curve is above the line, it indicates that our model is better than a random guess. 
+
+#iv
+First, we need to define a profit function for the optimization 
+$$Profit=FNLoss+TNProfit_{noDefault}$$
+```{r}
+profit=function(data,Model,prob){
+    fitted=(Model$fitted.values>=prob)
+    lables=data$Default
+    datatb=data.table(labels=lables,fitted=fitted)
+    TN=nrow(datatb[labels==0&fitted==0,,])
+    FN=nrow(datatb[labels==1&fitted==0,,])
+    profit=FN*(-10)+TN*1
+    return(profit)
+}
+```
+Then we can perform the optimizaion 
+```{r message=FALSE, warning=FALSE}
+Simple_Model_opt_prob=optim(par = 0,fn = profit,control = list(fnscale=-1),
+                                data=data,Model=SimpleLR,
+                                method='Nelder-Mead')
+Cutoff=Simple_Model_opt_prob$par
+names(Cutoff)='Cutoff Probability'
+kable(Cutoff)
+```
+
+plot on the RoC curve 
+```{r}
+    fitted=(SimpleLR$fitted.values>=0.1)
+    lables=CreditData$Default
+    datatb=data.table(labels=lables,fitted=fitted)
+    TPR=nrow(datatb[labels==1&fitted==1,])/sum(lables)
+    FPR=nrow(datatb[labels==0&fitted==1,])/sum(!lables)
+plt+geom_point(data=data.table(FPR=FPR,TPR=TPR),aes(x=FPR,y=TPR,size=I(3)))
+```
+
+
+##c Complicated Model
+#i
+```{r}
+Model2fc=glm(formula = Default~annual_inc+loan_amnt,data = CreditData,family = 'binomial')
+summary(Model2fc)
+```
+show the lift table
+```{r}
+kable(lift_table(Model = Model2fc,data = CreditData,break_probs = seq(0,1,0.1)))
+```
+
+```{r}
+get_Rate_tables=function(data,Model){
+  fitted=Model$fitted.values
+  lables=data$Default
+  lables=lables[order(fitted,decreasing = T)]
+  Rate_table=data.table(TPR=cumsum(lables)/sum(lables),
+                    FPR=cumsum(!lables)/sum(!lables))
+  return(Rate_table)}
+Model2fc_rate_table=cbind(Model='NewModel',get_Rate_tables(data = CreditData,Model = Model2fc))
+Grade_rate_table=cbind(Model='OldModel',get_Rate_tables(data = CreditData,Model = SimpleLR))
+#plot the two models 
+plt=qplot(y = TPR,x = FPR,data = rbind(Model2fc_rate_table,Grade_rate_table),col=Model,
+        main = 'ROC curve for logistic Regression',size=I(0.75))
+  #add a 45 degree line
+plt+geom_segment(aes(x = 0,xend=1,y=0,yend=1),size=I(1.0))+theme_bw()
+```
+From the lift table, we can see the spread of p-hat and lift-factors are much smaller, compared with the old model. Also, in the ROC graph, the new model curve is below the old model curve. 
+
+Therefore, we conclude that the old model outperforms the new model in terms of predictability power. 
+
+#ii
+```{r}
+Model3=glm(formula = Default~annual_inc+loan_amnt+term+int_rate,data = CreditData,family = 'binomial')
+summary(Model3)
+```
+From the table above we can see, R takes "term" as a categorical variable in our regression. The coefficient means that compared with being a 36 month loan, a 60 month loan will increase the predicted default score by 0.45. 
+
+Print the lift table. 
+```{r}
+kable(lift_table(Model = Model3,data = CreditData,break_probs = seq(0,1,0.1)))
+```
+
+Plot the ROC curve.
+```{r}
+Model3_rate_table=cbind(Model='Model3',get_Rate_tables(data = CreditData,Model = Model3))
+Grade_rate_table=cbind(Model='OldModel',get_Rate_tables(data = CreditData,Model = SimpleLR))
+#plot the two models 
+plt=qplot(y = TPR,x = FPR,data = rbind(Model3_rate_table,Grade_rate_table),col=Model,
+        main = 'ROC curve for logistic Regression',size=I(0.75))
+  #add a 45 degree line
+plt+geom_segment(aes(x = 0,xend=1,y=0,yend=1),size=I(1.0))+theme_bw()
+```
+From the lift table, we can see the spread of p-hat and lift-factors are much greater, compared with the old model. In the ROC graph, the new model curve is slightly above the old model curve. Therefore, we conclude that the Version 3 Model outperforms the old model in terms of predictability power.
+
+Although the new model does not take the borrower's credit rating as an input, it looks at variables that closely related with the repayability of the borrowers such as loan amount, interest rate, term and annual income of the borrowers. We can view credit rating of the borrower as a compressed score of these variables, which may explain why these two models have similar predictive power. However, when credit rating team computed the grade, they also reduced the dimensionality of the data (similar to a PCA algorithm), and lose of variability of the explanatory variables. As a result, a more complicated model that takes high dimensional data (more explanatory variables) will tend to outperform if the number of observations is large (which is true in this case).
+
+##iii
+```{r}
+Model4=glm(formula = Default~annual_inc+loan_amnt+term+int_rate+I(int_rate^2),data = CreditData,family = 'binomial')
+summary(Model4)
+```
+From the table above, we can see the coefficient on interest rate square is statistically significant. The coefficient on interest rate is the incremental default score or probability which banks bear and require to be compensated by risk premium. 
+
+However, my intuitive guess for the coefficient on interest rate square is the "price" paid by banks for convexity effects. Because if interest rate happen to change drastically, a duration-hedged bondholder (the bank) is better off. To compensate this "better-off", the banks tend to ask for lower interest rate for a given default probability and risk preiumum level. 
+
+Together, higher default probability indices higher interest rate to compensate the higher risk the lenders are bearing; however, lenders are also paying to the borrowers for the convexity effects they enjoy, which is shown by a negative relationship b/w default probability and interest rate square. 
+

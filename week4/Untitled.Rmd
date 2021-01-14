@@ -1,0 +1,200 @@
+---
+title: "Machine Learning PS4:ML trading Algo"
+author: "YiTao Hu"
+date: "26/04/2020"
+output: pdf_document
+---
+
+```{r message=FALSE, warning=FALSE}
+#import data and libraries
+library(readr)
+library(data.table)
+library(foreign)
+library(PerformanceAnalytics)
+library(glmnet)
+library(ggplot2)
+StockRetAcct_DT= as.data.table(read.dta("StockRetAcct_insample.dta")) #set the key as firm ID and year
+setkey(x = StockRetAcct_DT,FirmID,year)
+StockRetAcct_DT=na.omit(StockRetAcct_DT)
+```
+
+###Question 1
+#a
+```{r}
+#create the new feasures 
+Features_df=StockRetAcct_DT[,list(
+                                lnIssue=lnIssue,
+                                lnIssue2=lnIssue^2,
+                                lnIssueME=lnIssue*lnME,
+                                lnProf=lnProf,
+                                lnProf2=lnProf^2,
+                                lnProfME=lnProf*lnME,
+                                lnInv=lnInv,
+                                lnInv2=lnInv^2,
+                                lnInv=lnInv*lnME,
+                                lnME=lnME,
+                                lnME2=lnME^2
+                                ),
+                            by=list(FirmID,year)]
+
+Returns=StockRetAcct_DT[,1:4,]
+```
+
+#i
+
+Note in order to use the formula written in 48 page, we need to first normalize all our features cross-sectionally (because we assume zero mean and 1 variance.), and then using the formula to compute feature-based long-short portfolio returns. The method is similar to using Fama-MacBeth Reregression for Portfolio construction after reviewing notes of Lecture 1. The mean return of Factor portfolios are shown below.
+
+
+```{r}
+#define a function to normalize the features
+normalize=function(vec){
+  return((vec-mean(vec)))
+}
+FactorRet=data.frame(matrix(NA,35,12))
+i=1
+#cross-sectionally normalize
+for (t in min(Features_df$year):max(Features_df$year)){
+  Xt=as.matrix(Features_df[Features_df$year==t,3:ncol(Features_df)])
+  #get excess Return
+  Rt=exp(Returns[year==t,,]$lnAnnRet)-exp(Returns[year==t,,]$lnRf)
+  #normalize 
+  Xt=apply(Xt, 2, FUN=normalize)
+  #insert 1s
+  Xt=cbind(1,Xt)
+  #compute factor returns
+  FactorRet[i,]=t(Xt)%*%Rt/nrow(Xt)
+  #FactorRet[i,]=solve(t(Xt)%*%Xt)%*%t(Xt)%*%Rt
+  i=i+1
+}
+colnames(FactorRet)=c(colnames(Features_df[,3:ncol(Features_df),]),'EWMkt')
+row.names(FactorRet)=1980:2014
+colMeans(FactorRet)
+```
+
+The Var-Cov matrix is shown below
+
+```{r}
+cov(FactorRet)
+```
+
+The sample SR is shown below.
+```{r}
+FactorRet=xts(FactorRet,order.by=seq(from=as.Date('1980-01-01'),to=as.Date('2014-01-01'),by='years'))
+
+SharpeRatio(FactorRet,FUN = 'StdDev')
+```
+
+##ii
+
+Here, we perform C.V to choose the optimal lambda.
+```{r}
+#define a Cost function
+Costfn=function(Fitted,Truths){
+  return(mean((Fitted-Truths)^2))
+}
+TrainsetCV=FactorRet[1:25,]
+Testset=FactorRet[26:35,]
+
+#further divide the train data into training set and cv set
+CV_coefs=c()
+
+for (t in seq(1,21,by=5))
+  {
+  CVset=TrainsetCV[t:(t+4),]
+  Trainset=TrainsetCV[-t:-(t+4),]
+  Fbar_train=colMeans(Trainset)
+  Fbar_cv=colMeans(CVset)
+  X_train=cov(Trainset)
+  X_cv=cov(CVset)
+  Model=glmnet(x = X_train,y = Fbar_train,family = 'gaussian',alpha = 0.5)
+  Fiited_cv=predict(Model,X_cv)
+  Costs=apply(Fiited_cv, 2, FUN=Costfn,Truths=Fbar_cv)
+  CV_coef=cbind(Model$lambda,Costs)
+  CV_coefs=rbind(CV_coefs,CV_coef)
+}
+#compute mean Cost
+colnames(CV_coefs)=c('Lambda','Cost')
+CV_coefs=data.frame(CV_coefs)
+CV_coefs=aggregate(CV_coefs,by=list(CV_coefs$Lambda),FUN=mean)
+#find opt labmda
+opt_lambda=CV_coefs[CV_coefs$Cost==min(CV_coefs$Cost),]$Lambda
+```
+
+Then we use optimal lambda to re-estimate the Model, the betas are shown below 
+```{r}
+OptModel=glmnet(x=cov(TrainsetCV),y = colMeans(TrainsetCV),family = 'gaussian',lambda = opt_lambda,intercept = F)
+bs=OptModel$beta
+bs
+```
+
+##iii
+Finally we can compute the MVE Portfolio returns, which is given by:
+$$R^{Port}_t=b^TF_t$$
+```{r}
+MVE_Ret=t(bs)%*%t(as.matrix(Testset))
+```
+
+
+Then, we can compute the out-of-sample Performance statistics
+```{r}
+out_sample_test=list(Mean=mean(MVE_Ret),SD=sd(MVE_Ret),SR=mean(MVE_Ret)/sd(MVE_Ret))
+out_sample_test
+```
+
+##iv
+
+Note, to be realistic, we real-estimate our model each year and compute the MVE Portfolio in accorance. 
+
+```{r}
+#define a function to map from trainCVset to coeffs
+getbs=function(TrainsetCV)
+  {
+#further divide the train data into training set and cv set
+CV_coefs=c()
+
+for (t in seq(1,(nrow(TrainsetCV)-4),by=round(nrow(TrainsetCV)/5)))
+  {
+  CVset=TrainsetCV[t:(t+4),]
+  Trainset=TrainsetCV[-t:-(t+4),]
+  Fbar_train=colMeans(Trainset)
+  Fbar_cv=colMeans(CVset)
+  X_train=cov(Trainset)
+  X_cv=cov(CVset)
+  Model=glmnet(x = X_train,y = Fbar_train,family = 'gaussian',alpha = 0.5)
+  Fiited_cv=predict(Model,X_cv)
+  Costs=apply(Fiited_cv, 2, FUN=Costfn,Truths=Fbar_cv)
+  CV_coef=cbind(Model$lambda,Costs)
+  CV_coefs=rbind(CV_coefs,CV_coef)
+}
+#compute mean Cost
+colnames(CV_coefs)=c('Lambda','Cost')
+CV_coefs=data.frame(CV_coefs)
+CV_coefs=aggregate(CV_coefs,by=list(CV_coefs$Lambda),FUN=mean)
+#find opt labmda
+opt_lambda=CV_coefs[CV_coefs$Cost==min(CV_coefs$Cost),]$Lambda
+OptModel=glmnet(x=cov(TrainsetCV),y = colMeans(TrainsetCV),family = 'gaussian',lambda = opt_lambda,intercept = F)
+bs=OptModel$beta
+return(bs)
+}
+MVE_Port_Ret=c()
+#loop through time 
+for (t in 1:10){
+  bs=getbs(TrainsetCV = FactorRet[1:(t+24),])
+  Ret=as.numeric(t(bs)%*%t(as.matrix(Testset[t,])))
+  MVE_Port_Ret=c(MVE_Port_Ret,Ret)
+}
+MVE_Port=cumprod(1+MVE_Port_Ret)
+#compute VW port Ret
+StockRetAcct_DT[,EXRet:=exp(lnAnnRet)-exp(lnRf),]
+VWRET=StockRetAcct_DT[,list(VWRet=weighted.mean(x = EXRet,w = lnME)),by=year]
+VWRET=VWRET[order(year)]
+VWRET=VWRET[year>2004,]
+VWRET[,CumRet:=cumprod(VWRet+1),]
+#set the leverage factor
+k=sd(VWRET$VWRet)/sd(MVE_Port_Ret)
+MVE_Port_Ret=k*MVE_Port_Ret
+#plot the returns
+plt=ggplot(VWRET,aes(x = year,y = CumRet,color='VWMarket'))
+plt+geom_line()+geom_line(aes(y=MVE_Port,color='MVEPort'))
+```
+
